@@ -5,6 +5,7 @@ import layer1_802Phy.JE802PhyMode;
 import layer2_80211Mac.JE802_11BackoffEntity;
 import layer2_80211Mac.JE802_11Mac;
 import layer2_80211Mac.JE802_11MacAlgorithm;
+import java.util.Random;
 
 public class MobComp_Assignment07 extends JE802_11MacAlgorithm {
 	
@@ -29,6 +30,13 @@ public class MobComp_Assignment07 extends JE802_11MacAlgorithm {
 
 	// **ADDED**
 	private int step = 0;
+	private int master_step = 0;
+
+	// **ADDED**
+	// For evaluating PID in task 4
+	private int[] evaluation_feed;
+	private boolean evaluate_PID = false;
+	private int settling_bound = 2;
 
 	public MobComp_Assignment07(String name, JE802_11Mac mac) {
 		super(name, mac);
@@ -49,9 +57,53 @@ public class MobComp_Assignment07 extends JE802_11MacAlgorithm {
 
 		// it is possible to change the PhyMode
 		this.mac.getPhy().setCurrentTransmitPower_dBm(0);   
+
+
+
+		// Evaluate PID with set values (task 4)
+		// Testing flag:
+		this.evaluate_PID = true;
+
+		if (evaluate_PID) {
+			int datapoints = 15000;
+			this.evaluation_feed = this.generateFeedData(datapoints);
+		}
 	}
 
-	// **ADDED*
+	// **ADDED**
+	private int[] generateFeedData(int datapoints){
+		int slice = datapoints/15;
+
+		int[] data = new int[datapoints];
+
+		Random rand = new Random();
+		for (int i = slice; i < slice*4; i++) {
+			data[i] = 100;
+		}
+		for (int i = slice*4; i < slice*5; i++) {
+			data[i] = 50;
+		}
+
+		for (int i = slice*7; i < slice*8; i++) {
+			data[i] = 75;
+		}
+		
+		for (int i = slice*8; i < slice*9; i++) {
+			data[i] = rand.nextInt(100);
+		}
+
+		for (int i = slice*10; i < slice*11; i++) {
+			data[i] = i % 100;
+		}
+		for (int i = slice*11; i < slice*12; i++) {
+			data[i] = 100;
+		}
+
+		return data;
+	}
+
+
+	// **ADDED**
 	private int setIntValue(double state, int lowerBound, int upperBound) {
 		double ret = state * (upperBound - lowerBound);
 		// Good max and min operations ik ;)
@@ -67,7 +119,7 @@ public class MobComp_Assignment07 extends JE802_11MacAlgorithm {
 	@SuppressWarnings("unused")
 	@Override
 	public void compute() {
-
+		this.master_step += 1;
 		this.mac.getMlme().setTheIterationPeriod(0.1);  // the sampling period in seconds, which is the time between consecutive calls of this method "compute()"
 		this.theSamplingTime_sec =  this.mac.getMlme().getTheIterationPeriod().getTimeS(); // this sampling time can only be read after the MLME was constructed.
 		
@@ -75,9 +127,14 @@ public class MobComp_Assignment07 extends JE802_11MacAlgorithm {
 		int aQueueSize = this.theBackoffEntityAC01.getQueueSize();
 		int aCurrentQueueSize = this.theBackoffEntityAC01.getCurrentQueueSize();
 		JE802PhyMode aCurrentPhyMode = this.mac.getPhy().getCurrentPhyMode();
-
+	
 		// **ADDED**
 		// --------------------- ASSIGNMENT -------------------------------:
+		
+		// If evaluating PID, override current queue size:
+		if (this.evaluate_PID) {
+			aCurrentQueueSize = this.evaluation_feed[(this.master_step < evaluation_feed.length) ? this.master_step : 0];
+		}
 
 		// Observe backoff entities:
 		Integer AIFSN_AC01 = theBackoffEntityAC01.getDot11EDCAAIFSN();
@@ -113,16 +170,28 @@ public class MobComp_Assignment07 extends JE802_11MacAlgorithm {
 		if (plotter == null) {
 			plotter = new JEMultiPlotter("PID Controller, Station " + this.dot11MACAddress.toString(), "max", "time [s]", "MAC Queue", this.theUniqueEventScheduler.getEmulationEnd().getTimeMs() / 1000.0, true);
 			plotter.addSeries("PID");
-			plotter.addSeries("AIFSN");
-			plotter.addSeries("CWmin");
-			plotter.addSeries("current");
+			if (this.evaluate_PID) {
+				plotter.addSeries("TESTING current");
+				plotter.addSeries("upper confidence bound");
+				plotter.addSeries("lower confidence bound");
+			} else {
+				plotter.addSeries("AIFSN");
+				plotter.addSeries("CWmin");
+				plotter.addSeries("current");
+			}
 			plotter.display();
 		}
 		plotter.plot(((Double) theUniqueEventScheduler.now().getTimeMs()).doubleValue() / 1000.0, theBackoffEntityAC01.getQueueSize(), 0);
 		plotter.plot(((Double) theUniqueEventScheduler.now().getTimeMs()).doubleValue() / 1000.0, pid_controller.getLastResponse(), 1);
-		plotter.plot(((Double) theUniqueEventScheduler.now().getTimeMs()).doubleValue() / 1000.0, theBackoffEntityAC01.getDot11EDCAAIFSN(), 2);
-		plotter.plot(((Double) theUniqueEventScheduler.now().getTimeMs()).doubleValue() / 1000.0, theBackoffEntityAC01.getDot11EDCACWmin(), 3);
-		plotter.plot(((Double) theUniqueEventScheduler.now().getTimeMs()).doubleValue() / 1000.0, theBackoffEntityAC01.getCurrentQueueSize(), 4);
+		if (this.evaluate_PID) {
+			plotter.plot(((Double) theUniqueEventScheduler.now().getTimeMs()).doubleValue() / 1000.0, this.evaluation_feed[this.master_step], 2);
+			plotter.plot(((Double) theUniqueEventScheduler.now().getTimeMs()).doubleValue() / 1000.0, this.evaluation_feed[this.master_step] + this.settling_bound, 3);
+			plotter.plot(((Double) theUniqueEventScheduler.now().getTimeMs()).doubleValue() / 1000.0, this.evaluation_feed[this.master_step] - this.settling_bound, 4);
+		} else {
+			plotter.plot(((Double) theUniqueEventScheduler.now().getTimeMs()).doubleValue() / 1000.0, theBackoffEntityAC01.getDot11EDCAAIFSN(), 2);
+			plotter.plot(((Double) theUniqueEventScheduler.now().getTimeMs()).doubleValue() / 1000.0, theBackoffEntityAC01.getDot11EDCACWmin(), 3);
+			plotter.plot(((Double) theUniqueEventScheduler.now().getTimeMs()).doubleValue() / 1000.0, theBackoffEntityAC01.getCurrentQueueSize(), 4);
+		}
 	
 	}
 
